@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<!-- ============================================================
+     HERRAMIENTA DE INVENTARIOS v3
+     Funciones principales:
+       - Login con roles: Administrador y Usuario
+       - CRUD de productos (solo Admin)
+       - Ajuste de cantidades con registro de movimientos
+       - Cálculo automático de rotación de inventario
+       - Vista comparativa por ubicación y categoría
+       - Datos compartidos y persistentes via window.storage
+     ============================================================ -->
+
+<style>
+/* --- Reset básico --- */
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font-sans,system-ui);font-size:15px;color:var(--color-text-primary);background:transparent;padding:1rem}
+h1{font-size:20px;font-weight:500;margin-bottom:1.2rem}
+.hidden{display:none!important}
+
+/* --- Pantalla de login --- */
+#login-screen{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:320px;gap:16px}
+#login-screen h2{font-size:18px;font-weight:500}
+
+/* Tarjetas de selección de rol (Admin / Usuario) */
+.role-cards{display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%;max-width:400px}
+.role-card{background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:1.2rem;cursor:pointer;text-align:center}
+.role-card:hover{border-color:var(--color-border-primary)}
+.role-card.selected{border:2px solid #185FA5} /* Resalta la tarjeta seleccionada */
+.role-card-title{font-weight:500;margin-bottom:4px}
+.role-card-sub{font-size:12px;color:var(--color-text-secondary)}
+
+/* Campo de contraseña para Admin (oculto por defecto) */
+#pin-area{width:100%;max-width:400px}
+#pin-area input{width:100%;height:36px;padding:0 10px;border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);background:var(--color-background-primary);color:var(--color-text-primary);font-size:14px;margin-bottom:8px}
+.err{font-size:13px;color:#A32D2D}
+
+/* --- Botones generales --- */
+.btn{height:36px;padding:0 16px;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);background:transparent;color:var(--color-text-primary);font-size:14px;cursor:pointer;white-space:nowrap}
+.btn:hover{background:var(--color-background-secondary)}
+.btn-primary{background:#185FA5;border-color:#185FA5;color:#fff} /* Botón principal azul */
+.btn-primary:hover{background:#0C447C}
+
+/* --- Barra superior de la app --- */
+.toprow{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:1rem}
+
+/* Indicador de rol activo (Admin = azul, Usuario = verde) */
+.role-badge{font-size:12px;padding:3px 10px;border-radius:var(--border-radius-md);background:#E6F1FB;color:#0C447C;font-weight:500}
+.role-badge.user{background:#EAF3DE;color:#3B6D11}
+
+/* --- Pestañas de navegación (Inventario / Comparativa) --- */
+.tabs{display:flex;gap:4px;margin-bottom:1.2rem}
+.tab{padding:6px 16px;border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);font-size:13px;cursor:pointer;background:transparent;color:var(--color-text-secondary)}
+.tab.active{background:#185FA5;border-color:#185FA5;color:#fff}
+
+/* --- Tarjetas de métricas superiores --- */
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.2rem}
+.metric{background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:.9rem}
+.metric-label{font-size:11px;color:var(--color-text-secondary);margin-bottom:4px}
+.metric-value{font-size:20px;font-weight:500}
+.metric-value.warn{color:#854F0B} /* Naranja para alertas de stock bajo */
+
+/* --- Controles de filtrado y búsqueda --- */
+.controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:.8rem}
+.controls input,.controls select{flex:1;min-width:120px;height:36px;padding:0 10px;border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);background:var(--color-background-primary);color:var(--color-text-primary);font-size:14px}
+
+/* --- Tabla de inventario --- */
+.table-wrap{overflow-x:auto} /* Scroll horizontal en pantallas pequeñas */
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:800px}
+th{text-align:left;padding:7px 8px;border-bottom:0.5px solid var(--color-border-tertiary);color:var(--color-text-secondary);font-weight:500;font-size:11px;cursor:pointer;user-select:none;white-space:nowrap}
+th:hover{color:var(--color-text-primary)}
+td{padding:7px 8px;border-bottom:0.5px solid var(--color-border-tertiary);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--color-background-secondary)}
+
+/* Badges de estado de stock */
+.badge{display:inline-block;padding:2px 7px;border-radius:var(--border-radius-md);font-size:11px}
+.badge-ok{background:#EAF3DE;color:#3B6D11}   /* Verde: en stock */
+.badge-low{background:#FAEEDA;color:#854F0B}  /* Naranja: stock bajo (<=5) */
+.badge-out{background:#FCEBEB;color:#A32D2D}  /* Rojo: sin stock (0) */
+
+/* Badge de rotación (días promedio entre movimientos) */
+.rot-badge{display:inline-block;padding:2px 7px;border-radius:var(--border-radius-md);font-size:11px;background:#E6F1FB;color:#0C447C}
+.rot-none{color:var(--color-text-secondary);font-size:12px} /* Cuando no hay suficientes movimientos */
+
+/* Botones de acción dentro de cada fila */
+.icon-btn{background:none;border:none;cursor:pointer;color:var(--color-text-secondary);padding:3px 5px;border-radius:4px;font-size:13px}
+.icon-btn:hover{background:var(--color-background-secondary);color:var(--color-text-primary)}
+
+/* Controles de cantidad (+/-) en cada fila */
+.qty-ctrl{display:flex;align-items:center;gap:5px}
+.qty-btn{width:24px;height:24px;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);background:transparent;color:var(--color-text-primary);font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}
+.qty-btn:hover{background:var(--color-background-secondary)}
+
+/* Celda de notas: truncada con "..." si es muy larga */
+.notes-cell{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-text-secondary);font-size:12px}
+.sort-arrow{font-size:9px;margin-left:2px}
+.empty{text-align:center;padding:2rem;color:var(--color-text-secondary);font-size:14px}
+
+/* --- Modal de agregar/editar producto --- */
+.modal-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:100;align-items:center;justify-content:center}
+.modal-backdrop.open{display:flex}
+.modal{background:#0C447C;border:none;border-radius:var(--border-radius-lg);padding:1.5rem;width:100%;max-width:480px;color:#fff;max-height:90vh;overflow-y:auto}
+.modal h2{color:#fff;font-size:17px;font-weight:500;margin-bottom:1rem}
+.field{margin-bottom:10px}
+.field label{display:block;font-size:12px;color:#B5D4F4;margin-bottom:3px}
+.field input,.field select,.field textarea{width:100%;padding:6px 10px;border:0.5px solid #378ADD;border-radius:var(--border-radius-md);background:#185FA5;color:#fff;font-size:14px}
+.field input{height:36px}
+.field textarea{height:60px;resize:vertical;font-family:inherit}
+.field input::placeholder,.field textarea::placeholder{color:#85B7EB}
+.field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:#B5D4F4}
+.field select option{background:#0C447C;color:#fff}
+.frow{display:grid;grid-template-columns:1fr 1fr;gap:10px} /* Dos columnas en el formulario */
+.modal-footer{display:flex;gap:8px;justify-content:flex-end;margin-top:1rem}
+.modal .btn{color:#fff;border-color:#378ADD}
+.modal .btn:hover{background:#185FA5}
+
+/* --- Vista comparativa --- */
+.cmp-controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1rem;align-items:center}
+.cmp-controls select{height:36px;padding:0 10px;border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);background:var(--color-background-primary);color:var(--color-text-primary);font-size:14px;min-width:150px}
+.cmp-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px} /* Dos columnas lado a lado */
+.cmp-col{background:var(--color-background-secondary);border-radius:var(--border-radius-lg);padding:1rem}
+.cmp-col h3{font-size:14px;font-weight:500;margin-bottom:10px;color:#185FA5}
+.cmp-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:0.5px solid var(--color-border-tertiary);font-size:13px}
+.cmp-row:last-child{border-bottom:none}
+.cmp-cat{color:var(--color-text-secondary)}
+.cmp-qty{font-weight:500}
+.cmp-qty.low{color:#854F0B}
+.cmp-qty.out{color:#A32D2D}
+.cmp-rot{font-size:11px;color:#185FA5;margin-left:6px}
+.cmp-empty{font-size:13px;color:var(--color-text-secondary);text-align:center;padding:1rem 0}
+</style>
+
+<!-- ==================== PANTALLA DE LOGIN ==================== -->
+<div id="login-screen">
+  <h2>Acceder al inventario</h2>
+  <!-- Tarjetas de selección de rol -->
+  <div class="role-cards">
+    <div class="role-card" id="card-admin" onclick="selectRole('admin')">
+      <div class="role-card-title">Administrador</div>
+      <div class="role-card-sub">Acceso completo</div>
+    </div>
+    <div class="role-card" id="card-user" onclick="selectRole('user')">
+      <div class="role-card-title">Usuario</div>
+      <div class="role-card-sub">Solo salida de stock</div>
+    </div>
+  </div>
+  <!-- Campo de contraseña (solo visible si se selecciona Admin) -->
+  <div id="pin-area" class="hidden">
+    <input type="password" id="pin-input" placeholder="Contraseña de administrador" onkeydown="if(event.key==='Enter')doLogin()">
+    <div id="pin-err" class="err hidden">Contraseña incorrecta.</div>
+  </div>
+  <button class="btn btn-primary" style="width:100%;max-width:400px" onclick="doLogin()">Entrar</button>
+</div>
+
+<!-- ==================== APLICACIÓN PRINCIPAL ==================== -->
+<div id="app" class="hidden">
+  <!-- Barra superior: título, rol activo y botón de salir -->
+  <div class="toprow">
+    <h1>Inventario</h1>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span id="role-badge" class="role-badge"></span>
+      <button class="btn" onclick="logout()" style="font-size:13px">Salir</button>
+    </div>
+  </div>
+
+  <!-- Pestañas: Inventario y Comparativa -->
+  <div class="tabs">
+    <button class="tab active" id="tab-inv" onclick="showTab('inv')">Inventario</button>
+    <button class="tab" id="tab-cmp" onclick="showTab('cmp')">Comparativa</button>
+  </div>
+
+  <!-- ====== PESTAÑA: INVENTARIO ====== -->
+  <div id="view-inv">
+    <!-- Métricas resumen -->
+    <div class="metrics">
+      <div class="metric"><div class="metric-label">Total productos</div><div class="metric-value" id="m-total">0</div></div>
+      <div class="metric"><div class="metric-label">Valor total</div><div class="metric-value" id="m-valor">$0</div></div>
+      <div class="metric"><div class="metric-label">Stock bajo (&le;5)</div><div class="metric-value warn" id="m-bajo">0</div></div>
+      <!-- Rotación promedio: días promedio entre movimientos de todos los productos -->
+      <div class="metric"><div class="metric-label">Rotación promedio</div><div class="metric-value" id="m-rot">—</div></div>
+    </div>
+
+    <!-- Filtros de búsqueda + botón agregar (solo Admin) -->
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:.8rem">
+      <div class="controls" style="margin:0;flex:1">
+        <input id="buscar" placeholder="Buscar..." oninput="render()">
+        <select id="filtro-cat" onchange="render()"><option value="">Todas las categorías</option></select>
+        <select id="filtro-ubi" onchange="render()"><option value="">Todas las ubicaciones</option></select>
+      </div>
+      <button id="btn-add" class="btn btn-primary" onclick="openModal()">+ Agregar</button>
+    </div>
+
+    <!-- Tabla principal de productos -->
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th onclick="sortBy('nombre')">Nombre <span class="sort-arrow" id="sa-nombre"></span></th>
+          <th onclick="sortBy('sku')">SKU <span class="sort-arrow" id="sa-sku"></span></th>
+          <th onclick="sortBy('categoria')">Categoría <span class="sort-arrow" id="sa-categoria"></span></th>
+          <th onclick="sortBy('ubicacion')">Ubicación <span class="sort-arrow" id="sa-ubicacion"></span></th>
+          <th onclick="sortBy('cantidad')">Cantidad <span class="sort-arrow" id="sa-cantidad"></span></th>
+          <th onclick="sortBy('precio')">Precio <span class="sort-arrow" id="sa-precio"></span></th>
+          <th>Estado</th>
+          <!-- Rotación: días promedio entre movimientos de ese producto -->
+          <th onclick="sortBy('rotacion')">Rotación <span class="sort-arrow" id="sa-rotacion"></span></th>
+          <th>Notas</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="empty" style="display:none">No se encontraron productos.</div>
+  </div>
+
+  <!-- ====== PESTAÑA: COMPARATIVA ====== -->
+  <div id="view-cmp" class="hidden">
+    <!-- Selectores: dos ubicaciones a comparar + filtro de categoría -->
+    <div class="cmp-controls">
+      <select id="cmp-ubi1" onchange="renderCmp()"><option value="">Ubicación 1</option></select>
+      <select id="cmp-ubi2" onchange="renderCmp()"><option value="">Ubicación 2</option></select>
+      <select id="cmp-cat" onchange="renderCmp()"><option value="">Todas las categorías</option></select>
+    </div>
+    <!-- Columnas comparativas generadas dinámicamente por JS -->
+    <div class="cmp-grid" id="cmp-grid">
+      <div class="cmp-col"><div class="cmp-empty">Selecciona una ubicación</div></div>
+      <div class="cmp-col"><div class="cmp-empty">Selecciona una ubicación</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ====== MODAL: AGREGAR / EDITAR PRODUCTO ====== -->
+<div class="modal-backdrop" id="modal">
+  <div class="modal">
+    <h2 id="modal-title">Agregar producto</h2>
+    <div class="frow">
+      <div class="field"><label>Nombre *</label><input id="f-nombre" placeholder="Nombre del producto"></div>
+      <div class="field"><label>SKU / No. de parte</label><input id="f-sku" placeholder="Ej: TRN-001"></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Categoría</label>
+        <!-- Se puede escribir una nueva categoría o elegir una existente -->
+        <input id="f-cat-new" placeholder="Nueva categoría..." style="margin-bottom:4px">
+        <select id="f-cat-sel" onchange="if(this.value)document.getElementById('f-cat-new').value=this.value"><option value="">— existente —</option></select>
+      </div>
+      <div class="field"><label>Ubicación</label>
+        <!-- Igual: nueva ubicación o elegir existente -->
+        <input id="f-ubi-new" placeholder="Nueva ubicación..." style="margin-bottom:4px">
+        <select id="f-ubi-sel" onchange="if(this.value)document.getElementById('f-ubi-new').value=this.value"><option value="">— existente —</option></select>
+      </div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Cantidad</label><input id="f-cant" type="number" min="0" placeholder="0"></div>
+      <div class="field"><label>Unidad de medida</label><input id="f-unidad" placeholder="Ej: piezas, kg, litros"></div>
+    </div>
+    <div class="frow">
+      <div class="field"><label>Precio unitario ($)</label><input id="f-precio" type="number" min="0" step="0.01" placeholder="0.00"></div>
+      <div class="field"><label>Proveedor</label><input id="f-prov" placeholder="Nombre del proveedor"></div>
+    </div>
+    <div class="field"><label>Notas / descripción</label><textarea id="f-notas" placeholder="Observaciones adicionales..."></textarea></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="guardar()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// CONFIGURACIÓN GLOBAL
+// ============================================================
+const STORAGE_KEY = 'inventario-data-v3'; // Clave para guardar datos compartidos
+const ADMIN_PASS  = 'admin123';            // Contraseña del administrador
+
+let items     = []; // Array principal con todos los productos
+let role      = null; // Rol activo: 'admin' o 'user'
+let editId    = null; // ID del producto que se está editando (null = nuevo)
+let sortCol   = 'nombre'; // Columna activa para ordenar la tabla
+let sortDir   = 1;        // Dirección de orden: 1 = ascendente, -1 = descendente
+
+// ============================================================
+// PERSISTENCIA: cargar y guardar datos en storage compartido
+// ============================================================
+
+// Carga los productos guardados al iniciar la app
+async function loadData() {
+  try {
+    const r = await window.storage.get(STORAGE_KEY, true); // true = datos compartidos
+    if (r && r.value) items = JSON.parse(r.value);
+  } catch(e) { items = []; }
+}
+
+// Guarda el array de productos actualizado
+async function saveData() {
+  try { await window.storage.set(STORAGE_KEY, JSON.stringify(items), true); } catch(e) {}
+}
+
+// Genera un ID único para cada producto nuevo
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
+
+// ============================================================
+// LOGIN Y ROLES
+// ============================================================
+
+// Marca visualmente el rol seleccionado y muestra/oculta el campo de contraseña
+function selectRole(r) {
+  role = r;
+  document.getElementById('card-admin').classList.toggle('selected', r === 'admin');
+  document.getElementById('card-user').classList.toggle('selected',  r === 'user');
+  document.getElementById('pin-area').classList.toggle('hidden', r !== 'admin');
+  document.getElementById('pin-err').classList.add('hidden');
+}
+
+// Valida credenciales y muestra la app si son correctas
+function doLogin() {
+  if (!role) { alert('Selecciona un rol.'); return; }
+  if (role === 'admin') {
+    const p = document.getElementById('pin-input').value;
+    if (p !== ADMIN_PASS) { document.getElementById('pin-err').classList.remove('hidden'); return; }
+  }
+  // Ocultar login y mostrar app
+  document.getElementById('login-screen').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  // Mostrar badge de rol
+  const badge = document.getElementById('role-badge');
+  badge.textContent = role === 'admin' ? 'Administrador' : 'Usuario';
+  badge.className   = 'role-badge' + (role === 'user' ? ' user' : '');
+  // El botón "Agregar" solo es visible para Admin
+  document.getElementById('btn-add').classList.toggle('hidden', role !== 'admin');
+  render(); renderCmp();
+}
+
+// Cierra sesión y vuelve a la pantalla de login
+function logout() {
+  role = null;
+  document.getElementById('login-screen').classList.remove('hidden');
+  document.getElementById('app').classList.add('hidden');
+  document.getElementById('pin-input').value = '';
+  ['card-admin','card-user'].forEach(id => document.getElementById(id).classList.remove('selected'));
+  document.getElementById('pin-area').classList.add('hidden');
+}
+
+// ============================================================
+// NAVEGACIÓN ENTRE PESTAÑAS
+// ============================================================
+function showTab(t) {
+  document.getElementById('view-inv').classList.toggle('hidden', t !== 'inv');
+  document.getElementById('view-cmp').classList.toggle('hidden', t !== 'cmp');
+  document.getElementById('tab-inv').classList.toggle('active',  t === 'inv');
+  document.getElementById('tab-cmp').classList.toggle('active',  t === 'cmp');
+  if (t === 'cmp') renderCmp();
+}
+
+// ============================================================
+// UTILIDADES DE DATOS
+// ============================================================
+
+// Devuelve valores únicos y ordenados de una propiedad (para llenar los selects)
+function uniq(key) {
+  return [...new Set(items.map(i => i[key]).filter(Boolean))].sort();
+}
+
+// Actualiza todos los <select> de categorías y ubicaciones con los valores actuales
+function updateSelects() {
+  const cats = uniq('categoria'), ubis = uniq('ubicacion');
+  // Selects de categoría: filtro principal, modal y comparativa
+  [['filtro-cat', cats], ['f-cat-sel', cats], ['cmp-cat', cats]].forEach(([id, list]) => {
+    const el = document.getElementById(id), v = el.value;
+    while (el.options.length > 1) el.remove(1);
+    list.forEach(c => { const o = document.createElement('option'); o.value = o.text = c; el.appendChild(o); });
+    el.value = v; // Mantiene el valor seleccionado antes de actualizar
+  });
+  // Selects de ubicación: filtro principal, modal y ambas columnas de comparativa
+  [['filtro-ubi', ubis], ['f-ubi-sel', ubis], ['cmp-ubi1', ubis], ['cmp-ubi2', ubis]].forEach(([id, list]) => {
+    const el = document.getElementById(id), v = el.value;
+    while (el.options.length > 1) el.remove(1);
+    list.forEach(u => { const o = document.createElement('option'); o.value = o.text = u; el.appendChild(o); });
+    el.value = v;
+  });
+}
+
+// ============================================================
+// ROTACIÓN DE INVENTARIO
+// Calcula los días promedio entre movimientos (entradas/salidas)
+// Requiere al menos 2 movimientos registrados para calcular
+// ============================================================
+function calcRot(it) {
+  const mv = it.movimientos || [];
+  if (mv.length < 2) return null; // Sin suficientes datos
+  const dates = mv.map(m => m.ts).sort((a, b) => a - b);
+  let diffs = [];
+  // Calcula la diferencia en días entre cada par de movimientos consecutivos
+  for (let i = 1; i < dates.length; i++) {
+    diffs.push((dates[i] - dates[i-1]) / (1000 * 60 * 60 * 24));
+  }
+  return Math.round(diffs.reduce((a, b) => a + b, 0) / diffs.length);
+}
+
+// Genera el HTML del badge de rotación para mostrar en la tabla
+function rotLabel(it) {
+  const d = calcRot(it);
+  if (d === null) return `<span class="rot-none">Sin datos</span>`;
+  if (d === 0)    return `<span class="rot-badge">Mismo día</span>`;
+  return `<span class="rot-badge">c/~${d}d</span>`; // Ej: "c/~3d" = cada ~3 días
+}
+
+// ============================================================
+// BADGES DE ESTADO DE STOCK
+// ============================================================
+function badge(c) {
+  if (c === 0)  return '<span class="badge badge-out">Sin stock</span>';
+  if (c <= 5)   return '<span class="badge badge-low">Stock bajo</span>';
+  return '<span class="badge badge-ok">En stock</span>';
+}
+
+// ============================================================
+// ORDENAMIENTO DE LA TABLA
+// Alterna entre ascendente y descendente al hacer clic en el encabezado
+// ============================================================
+function sortBy(col) {
+  if (sortCol === col) sortDir *= -1; // Invierte dirección si ya está ordenado por esta columna
+  else { sortCol = col; sortDir = 1; }
+  render();
+}
+
+// ============================================================
+// CELDA DE CANTIDAD CON CONTROLES +/-
+// Admin: puede subir y bajar | Usuario: solo puede bajar
+// ============================================================
+function qtyCell(it) {
+  const u = it.unidad ? ` <span style="font-size:11px;color:var(--color-text-secondary)">${it.unidad}</span>` : '';
+  if (role === 'admin') {
+    return `<div class="qty-ctrl">
+      <button class="qty-btn" onclick="adjQty('${it.id}',-1)">-</button>
+      <span>${it.cantidad}${u}</span>
+      <button class="qty-btn" onclick="adjQty('${it.id}',1)">+</button>
+    </div>`;
+  }
+  // Usuario solo ve el botón de disminuir
+  return `<div class="qty-ctrl">
+    <button class="qty-btn" onclick="adjQty('${it.id}',-1)">-</button>
+    <span>${it.cantidad}${u}</span>
+  </div>`;
+}
+
+// Ajusta la cantidad de un producto y registra el movimiento con timestamp
+async function adjQty(id, delta) {
+  const it = items.find(i => i.id === id);
+  if (!it) return;
+  const nv = it.cantidad + delta;
+  if (nv < 0) { alert('La cantidad no puede ser negativa.'); return; }
+  it.cantidad = nv;
+  // Registrar el movimiento para el cálculo de rotación
+  if (!it.movimientos) it.movimientos = [];
+  it.movimientos.push({ ts: Date.now(), delta, qty: nv });
+  // Limitar historial a 200 movimientos por producto para no sobrecargar el storage
+  if (it.movimientos.length > 200) it.movimientos = it.movimientos.slice(-200);
+  await saveData();
+  render();
+}
+
+// ============================================================
+// RENDER PRINCIPAL: dibuja la tabla y actualiza métricas
+// ============================================================
+function render() {
+  updateSelects();
+  const q   = document.getElementById('buscar').value.toLowerCase();
+  const cat = document.getElementById('filtro-cat').value;
+  const ubi = document.getElementById('filtro-ubi').value;
+
+  // Actualizar flechas de ordenamiento en encabezados
+  ['nombre','sku','categoria','ubicacion','cantidad','precio','rotacion'].forEach(c => {
+    const el = document.getElementById('sa-' + c);
+    if (el) el.textContent = sortCol === c ? (sortDir === 1 ? '▲' : '▼') : '';
+  });
+
+  // Filtrar productos según búsqueda, categoría y ubicación
+  let list = items.filter(i =>
+    (!q   || [i.nombre, i.sku, i.categoria, i.ubicacion, i.proveedor].some(v => (v||'').toLowerCase().includes(q))) &&
+    (!cat || i.categoria === cat) &&
+    (!ubi || i.ubicacion === ubi)
+  ).sort((a, b) => {
+    // Para rotación usamos calcRot; productos sin datos van al final (9999)
+    let av = sortCol === 'rotacion' ? calcRot(a) ?? 9999 : a[sortCol];
+    let bv = sortCol === 'rotacion' ? calcRot(b) ?? 9999 : b[sortCol];
+    if (typeof av === 'string') { av = (av||'').toLowerCase(); bv = (bv||'').toLowerCase(); }
+    return av < bv ? -sortDir : av > bv ? sortDir : 0;
+  });
+
+  const tbody = document.getElementById('tbody');
+  const empty = document.getElementById('empty');
+  tbody.innerHTML = '';
+  empty.style.display = list.length === 0 ? '' : 'none';
+
+  // Dibujar cada fila de producto
+  list.forEach(it => {
+    const tr = document.createElement('tr');
+    // Botones de editar/eliminar solo para Admin
+    const adminBtns = role === 'admin'
+      ? `<button class="icon-btn" onclick="editItem('${it.id}')" title="Editar">&#9998;</button>
+         <button class="icon-btn" onclick="deleteItem('${it.id}')" title="Eliminar" style="color:#A32D2D">&#128465;</button>`
+      : '';
+    tr.innerHTML = `
+      <td><strong style="font-weight:500">${it.nombre}</strong></td>
+      <td style="color:var(--color-text-secondary);font-size:12px">${it.sku || '—'}</td>
+      <td>${it.categoria || '<span style="color:var(--color-text-secondary)">—</span>'}</td>
+      <td>${it.ubicacion || '<span style="color:var(--color-text-secondary)">—</span>'}</td>
+      <td>${qtyCell(it)}</td>
+      <td>$${parseFloat(it.precio||0).toFixed(2)}</td>
+      <td>${badge(it.cantidad)}</td>
+      <td>${rotLabel(it)}</td>
+      <!-- Notas truncadas; el atributo title muestra el texto completo al pasar el cursor -->
+      <td><div class="notes-cell" title="${(it.notas||'').replace(/"/g,"'")}">${it.notas || '<span style="color:var(--color-text-secondary)">—</span>'}</div></td>
+      <td style="text-align:right;white-space:nowrap">${adminBtns}</td>`;
+    tbody.appendChild(tr);
+  });
+
+  // Actualizar métricas superiores
+  document.getElementById('m-total').textContent = items.length;
+  const val = items.reduce((s, i) => s + (i.cantidad * (i.precio||0)), 0);
+  document.getElementById('m-valor').textContent = '$' + val.toLocaleString('es-MX', {minimumFractionDigits:2, maximumFractionDigits:2});
+  document.getElementById('m-bajo').textContent  = items.filter(i => i.cantidad <= 5).length;
+  // Rotación promedio global: promedio de todos los productos con datos de movimiento
+  const rots = items.map(i => calcRot(i)).filter(v => v !== null);
+  document.getElementById('m-rot').textContent = rots.length
+    ? '~' + Math.round(rots.reduce((a, b) => a + b, 0) / rots.length) + 'd'
+    : '—';
+}
+
+// ============================================================
+// RENDER COMPARATIVA
+// Muestra stock y rotación por categoría para dos ubicaciones
+// ============================================================
+function renderCmp() {
+  updateSelects();
+  const u1  = document.getElementById('cmp-ubi1').value;
+  const u2  = document.getElementById('cmp-ubi2').value;
+  const cat = document.getElementById('cmp-cat').value;
+  const grid = document.getElementById('cmp-grid');
+
+  // Genera el HTML de una columna comparativa para una ubicación dada
+  function colHtml(ubi) {
+    if (!ubi) return `<div class="cmp-col"><div class="cmp-empty">Selecciona una ubicación</div></div>`;
+    let filtered = items.filter(i => i.ubicacion === ubi && (!cat || i.categoria === cat));
+    // Agrupar por categoría sumando cantidades y rotaciones
+    const bycat = {};
+    filtered.forEach(i => {
+      const c = i.categoria || 'Sin categoría';
+      if (!bycat[c]) bycat[c] = { qty: 0, rots: [] };
+      bycat[c].qty += i.cantidad;
+      const r = calcRot(i); if (r !== null) bycat[c].rots.push(r);
+    });
+    const keys = Object.keys(bycat).sort();
+    if (keys.length === 0) return `<div class="cmp-col"><h3>${ubi}</h3><div class="cmp-empty">Sin productos</div></div>`;
+    const total = filtered.reduce((s, i) => s + i.cantidad, 0);
+    const rows = keys.map(c => {
+      const { qty, rots } = bycat[c];
+      const cls     = qty === 0 ? ' out' : qty <= 5 ? ' low' : '';
+      const rotStr  = rots.length
+        ? `<span class="cmp-rot">~${Math.round(rots.reduce((a,b)=>a+b)/rots.length)}d</span>`
+        : '';
+      return `<div class="cmp-row">
+        <span class="cmp-cat">${c}</span>
+        <span><span class="cmp-qty${cls}">${qty}</span>${rotStr}</span>
+      </div>`;
+    }).join('');
+    return `<div class="cmp-col">
+      <h3>${ubi}</h3>${rows}
+      <div class="cmp-row" style="margin-top:8px;border-top:0.5px solid var(--color-border-secondary);padding-top:8px">
+        <span style="font-weight:500">Total</span>
+        <span style="font-weight:500">${total}</span>
+      </div>
+    </div>`;
+  }
+  grid.innerHTML = colHtml(u1) + colHtml(u2);
+}
+
+// ============================================================
+// MODAL: ABRIR / CERRAR / GUARDAR
+// ============================================================
+
+// Abre el modal. Si recibe un id, carga los datos de ese producto (modo editar)
+function openModal(id) {
+  editId = id || null;
+  document.getElementById('modal-title').textContent = editId ? 'Editar producto' : 'Agregar producto';
+  if (editId) {
+    // Pre-llenar el formulario con los datos actuales del producto
+    const it = items.find(i => i.id === editId);
+    document.getElementById('f-nombre').value = it.nombre   || '';
+    document.getElementById('f-sku').value    = it.sku      || '';
+    document.getElementById('f-cat-new').value = it.categoria || '';
+    document.getElementById('f-ubi-new').value = it.ubicacion || '';
+    document.getElementById('f-cant').value   = it.cantidad || 0;
+    document.getElementById('f-unidad').value = it.unidad   || '';
+    document.getElementById('f-precio').value = it.precio   || '';
+    document.getElementById('f-prov').value   = it.proveedor|| '';
+    document.getElementById('f-notas').value  = it.notas    || '';
+  } else {
+    // Limpiar todos los campos para un producto nuevo
+    ['f-nombre','f-sku','f-cat-new','f-ubi-new','f-cant','f-unidad','f-precio','f-prov','f-notas']
+      .forEach(f => document.getElementById(f).value = '');
+  }
+  updateSelects();
+  document.getElementById('modal').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+}
+
+// Lee los campos del formulario, valida y guarda (crea o actualiza)
+async function guardar() {
+  const nombre = document.getElementById('f-nombre').value.trim();
+  if (!nombre) { alert('El nombre es obligatorio.'); return; }
+  const data = {
+    nombre,
+    sku:       document.getElementById('f-sku').value.trim(),
+    categoria: document.getElementById('f-cat-new').value.trim(),
+    ubicacion: document.getElementById('f-ubi-new').value.trim(),
+    cantidad:  parseInt(document.getElementById('f-cant').value)    || 0,
+    unidad:    document.getElementById('f-unidad').value.trim(),
+    precio:    parseFloat(document.getElementById('f-precio').value) || 0,
+    proveedor: document.getElementById('f-prov').value.trim(),
+    notas:     document.getElementById('f-notas').value.trim()
+  };
+  if (editId) {
+    // Actualizar producto existente conservando sus movimientos de rotación
+    Object.assign(items.find(i => i.id === editId), data);
+  } else {
+    // Crear producto nuevo con array de movimientos vacío
+    items.push({ id: uid(), movimientos: [], ...data });
+  }
+  await saveData();
+  closeModal();
+  render();
+}
+
+// ============================================================
+// EDITAR Y ELIMINAR (solo Admin)
+// ============================================================
+function editItem(id) { openModal(id); }
+
+async function deleteItem(id) {
+  if (!confirm('¿Eliminar este producto?')) return;
+  items = items.filter(i => i.id !== id);
+  await saveData();
+  render();
+}
+
+// Cerrar modal al hacer clic en el fondo oscuro (fuera del modal)
+document.getElementById('modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('modal')) closeModal();
+});
+
+// ============================================================
+// INICIO: cargar datos y esperar selección de rol
+// ============================================================
+loadData();
+</script>
